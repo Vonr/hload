@@ -5,9 +5,10 @@ Simple HTTP load testing tool that mimics portions of cURL's CLI.
 
 ## Installation
 
-hload provides automatically built binaries in the [releases](https://github.com/Vonr/hload/releases), which may be retrieved manually or with [cargo-binstall](https://github.com/cargo-bins/cargo-binstall).
+hload provides automatically built binaries for certain targets in the [releases](https://github.com/Vonr/hload/releases).   
+They may be retrieved manually or with [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) with `cargo binstall hload`.
 
-You can choose to install from source with `cargo install --git https://github.com/Vonr/hload`
+You can choose to install from source with `cargo install hload`
 
 ## Credits
 
