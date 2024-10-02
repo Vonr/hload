@@ -3,6 +3,9 @@ name = "hload"
 version = "1.0.0"
 edition = "2021"
 license = "MIT"
+homepage = "https://github.com/Vonr/hload"
+repository = "https://github.com/Vonr/hload"
+keywords = ["http", "cli"]
 include = ["src/main.rs", "LICENSE", "README.md"]
 
 [profile.release]
