@@ -1,5 +1,5 @@
 # hload
-[![Crates.io](https://img.shields.io/crates/v/parui)](https://crates.io/crates/parui)
+[![Crates.io](https://img.shields.io/crates/v/hload)](https://crates.io/crates/hload)
 
 Simple HTTP load testing tool that mimics portions of cURL's CLI.
 
