@@ -26,7 +26,7 @@ tokio = { version = "1.40", features = ["macros", "rt-multi-thread"] }
 quantiles = "0.7"
 
 [package.metadata.binstall]
-pkg-url = "{ repo }/releases/download/{ version }/{ name }-{ version }-{ target }-{ archive-suffix }"
+pkg-url = "{ repo }/releases/download/{ version }/{ name }-{ version }-{ target }{ archive-suffix }"
 bin-dir = "{ name }-{ version }-{ target }/{ bin }{ binary-ext }"
 pkg-fmt = "tgz"
 disabled-strategies = ["quick-install", "compile"]
