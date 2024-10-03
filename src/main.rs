@@ -78,7 +78,7 @@ async fn main() -> ExitCode {
     for header in unparsed_headers {
         let Some((k, v)) = header.split_once(':') else {
             log!(Level::Error, "Malformed header {:?}", header);
-            std::process::exit(1);
+            return ExitCode::FAILURE;
         };
 
         headers.insert(k.trim(), HeaderValue::from_str(v.trim()).unwrap());
@@ -94,7 +94,7 @@ async fn main() -> ExitCode {
         Ok(r) => r,
         Err(e) => {
             log!(Level::Error, "Could not build request: {e:?}");
-            std::process::exit(1);
+            return ExitCode::FAILURE;
         }
     };
 
