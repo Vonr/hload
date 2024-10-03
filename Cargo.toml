@@ -20,7 +20,7 @@ clap = { version = "4", features = ["derive"] }
 futures-buffered = "0.2"
 humantime = "2"
 parking_lot = "0.12"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "charset", "http2", "macos-system-configuration", "hickory-dns", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "macos-system-configuration", "hickory-dns", "stream"] }
 spdlog-rs = { version = "0.3", features = ["multi-thread"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 quantiles = "0.7"
