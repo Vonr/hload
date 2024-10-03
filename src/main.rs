@@ -13,6 +13,9 @@ use std::{
 };
 
 use clap::Parser;
+use futures_buffered::FuturesUnorderedBounded;
+use futures_util::StreamExt;
+use parking_lot::Mutex;
 use quantiles::ckms::CKMS;
 use reqwest::{
     header::{HeaderMap, HeaderValue},
@@ -43,6 +46,13 @@ struct Args {
         help = "Number of tasks to spawn (defaults to ncpus * 4)"
     )]
     tasks: Option<NonZeroUsize>,
+
+    #[arg(
+        short = 's',
+        long,
+        help = "Suppress output of requests, including errors which then will only be printed at the end"
+    )]
+    silent: bool,
 }
 
 #[tokio::main]
@@ -96,20 +106,25 @@ async fn main() -> ExitCode {
     });
 
     let idx = Arc::new(AtomicU64::from(1));
-    let mut futures = Vec::with_capacity(tasks);
+    let mut futures = FuturesUnorderedBounded::new(tasks);
     let (errs_send, errs_recv) = flume::unbounded();
     let count = args.count.get();
-    let (timings_send, timings_recv) = flume::bounded(count as usize);
     let start = std::time::Instant::now();
+
+    let percentiles = Arc::new(Mutex::new(CKMS::<f64>::new(0.001)));
+    let mean = Arc::new(AtomicU64::from(f64::to_bits(0.0)));
 
     for _ in 0..tasks {
         let client = client.clone();
         let request = request.try_clone().unwrap();
         let idx = idx.clone();
         let errs_send = errs_send.clone();
-        let timings_send = timings_send.clone();
+        let percentiles = percentiles.clone();
+        let mean = mean.clone();
 
         futures.push(tokio::spawn(async move {
+            let mut buf = Vec::new();
+
             loop {
                 let idx = idx.fetch_add(1, Ordering::Relaxed);
                 if idx > count {
@@ -124,19 +139,64 @@ async fn main() -> ExitCode {
                 {
                     Ok(res) => {
                         let elapsed = start.elapsed();
-                        timings_send.send_async(elapsed).await.unwrap();
+                        percentiles
+                            .lock()
+                            .insert(elapsed.as_micros() as f64 / 1000.);
+                        _ = mean.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                            Some(f64::to_bits(
+                                f64::from_bits(n) + elapsed.as_micros() as f64 / count as f64,
+                            ))
+                        });
+
+                        if args.silent {
+                            continue;
+                        }
+
+                        let status = res.status();
+
+                        let log_empty = || {
+                            log!(
+                                Level::Info,
+                                "[{}/{}] [{}] in {:.02}ms",
+                                idx,
+                                args.count,
+                                status,
+                                elapsed.as_micros() as f64 / 1000.,
+                            );
+                        };
+
+                        if res.content_length().is_some_and(|n| n == 0) {
+                            log_empty();
+                            continue;
+                        }
+
+                        buf.clear();
+                        let mut stream = res.bytes_stream();
+                        while let Some(Ok(b)) = stream.next().await {
+                            buf.extend_from_slice(&b);
+                        }
+
+                        if buf.is_empty() {
+                            log_empty();
+                            continue;
+                        }
+
+                        let str = String::from_utf8_lossy(&buf);
                         log!(
                             Level::Info,
                             "[{}/{}] [{}] in {:.02}ms: {}",
                             idx,
                             args.count,
-                            res.status(),
+                            status,
                             elapsed.as_micros() as f64 / 1000.,
-                            res.text().await.unwrap_or_else(|_| "<unknown>".to_string())
-                        )
+                            str
+                        );
                     }
                     Err(e) => {
-                        log!(Level::Error, "{}", &e);
+                        if !args.silent {
+                            log!(Level::Error, "{}", &e);
+                        }
+
                         let _ = errs_send.send_async(e).await;
                     }
                 };
@@ -144,7 +204,9 @@ async fn main() -> ExitCode {
         }));
     }
 
-    futures_buffered::join_all(futures).await;
+    for _ in 0..tasks {
+        futures.next().await;
+    }
     let elapsed = start.elapsed();
 
     let mut exit = ExitCode::SUCCESS;
@@ -163,12 +225,7 @@ async fn main() -> ExitCode {
         exit = ExitCode::FAILURE;
     }
 
-    let mut percentiles = CKMS::<f64>::new(0.001);
-    let mut mean = 0.0;
-    for timing in timings_recv.drain() {
-        percentiles.insert(timing.as_micros() as f64 / 1000.);
-        mean += timing.as_micros() as f64 / count as f64;
-    }
+    let percentiles = Arc::into_inner(percentiles).unwrap().into_inner();
 
     log!(
         Level::Info,
@@ -176,14 +233,14 @@ async fn main() -> ExitCode {
         count,
         elapsed.as_millis() as f64 / 1000.,
         (count as f64 / elapsed.as_secs_f64()),
-        mean / 1000.,
-        percentiles.query(0.00).unwrap().1,
-        percentiles.query(0.01).unwrap().1,
-        percentiles.query(0.25).unwrap().1,
-        percentiles.query(0.50).unwrap().1,
-        percentiles.query(0.75).unwrap().1,
-        percentiles.query(0.99).unwrap().1,
-        percentiles.query(1.00).unwrap().1,
+        f64::from_bits(mean.load(Ordering::Relaxed)) / 1000.,
+        percentiles.query(0.00).unwrap_or((0, f64::NAN)).1,
+        percentiles.query(0.01).unwrap_or((0, f64::NAN)).1,
+        percentiles.query(0.25).unwrap_or((0, f64::NAN)).1,
+        percentiles.query(0.50).unwrap_or((0, f64::NAN)).1,
+        percentiles.query(0.75).unwrap_or((0, f64::NAN)).1,
+        percentiles.query(0.99).unwrap_or((0, f64::NAN)).1,
+        percentiles.query(1.00).unwrap_or((0, f64::NAN)).1,
     );
 
     exit

@@ -1,7 +1,7 @@
 [package]
 name = "hload"
 description = "Simple HTTP load testing tool that mimics portions of cURL's CLI.."
-version = "1.0.1"
+version = "1.0.2"
 edition = "2021"
 license = "MIT"
 homepage = "https://github.com/Vonr/hload"
@@ -21,10 +21,11 @@ flume = "0.11"
 futures-buffered = "0.2"
 humantime = "2"
 parking_lot = "0.12"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "charset", "http2", "macos-system-configuration"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "charset", "http2", "macos-system-configuration", "hickory-dns", "stream"] }
 spdlog-rs = { version = "0.3", features = ["multi-thread"] }
 tokio = { version = "1.40", features = ["macros", "rt-multi-thread"] }
 quantiles = "0.7"
+futures-util = "0.3.30"
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/{ version }/{ name }-{ version }-{ target }{ archive-suffix }"
