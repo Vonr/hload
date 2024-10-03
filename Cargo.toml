@@ -22,9 +22,10 @@ humantime = "2"
 parking_lot = "0.12"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "macos-system-configuration", "hickory-dns", "stream"] }
 spdlog-rs = { version = "0.3", features = ["multi-thread"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
 quantiles = "0.7"
 futures-util = "0.3"
+async-scoped = { version = "0.9", features = ["tokio", "use-tokio"] }
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/{ version }/{ name }-{ version }-{ target }{ archive-suffix }"

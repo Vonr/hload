@@ -5,15 +5,11 @@ use std::{
     ffi::OsString,
     num::NonZeroUsize,
     str::FromStr,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
+    sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
 
 use clap::Parser;
-use futures_buffered::FuturesUnorderedBounded;
 use futures_util::StreamExt;
 use parking_lot::Mutex;
 use quantiles::ckms::CKMS;
@@ -55,8 +51,16 @@ struct Args {
     silent: bool,
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(start())
+}
+
+async fn start() -> ExitCode {
     let args = Args::parse();
 
     let default_logger = spdlog::default_logger();
@@ -110,139 +114,137 @@ async fn main() -> ExitCode {
             * 4
     });
 
-    let mut futures = FuturesUnorderedBounded::new(tasks);
-    let idx = Arc::new(AtomicU64::from(1));
-    let err_msg = Arc::new(Mutex::new(String::new()));
+    let idx = AtomicU64::from(1);
+    let err_msg = Mutex::new(String::new());
     let start = std::time::Instant::now();
 
-    let percentiles = Arc::new(Mutex::new(CKMS::<f64>::new(0.001)));
-    let mean = Arc::new(AtomicU64::from(f64::to_bits(0.0)));
+    let percentiles = Mutex::new(CKMS::<f64>::new(0.001));
+    let mean = AtomicU64::from(f64::to_bits(0.0));
 
     let count = args.count.get();
-    for _ in 0..tasks {
-        let client = client.clone();
-        let request = request.try_clone().unwrap();
-        let idx = idx.clone();
-        let percentiles = percentiles.clone();
-        let mean = mean.clone();
-        let err_msg = err_msg.clone();
+    async_scoped::TokioScope::scope_and_block(|s| {
+        for _ in 0..tasks {
+            let client = &client;
+            let request = &request;
+            let idx = &idx;
+            let percentiles = &percentiles;
+            let mean = &mean;
+            let err_msg = &err_msg;
 
-        futures.push(tokio::spawn(async move {
-            let mut buf = Vec::new();
+            s.spawn(async move {
+                let mut buf = Vec::new();
 
-            loop {
-                let idx = idx.fetch_add(1, Ordering::Relaxed);
-                if idx > count {
-                    break;
-                }
-
-                let start = std::time::Instant::now();
-                match client
-                    .execute(request.try_clone().unwrap())
-                    .await
-                    .and_then(|r| r.error_for_status())
-                {
-                    Ok(res) => {
-                        let elapsed = start.elapsed();
-                        percentiles
-                            .lock()
-                            .insert(elapsed.as_micros() as f64 / 1000.);
-                        _ = mean.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
-                            Some(f64::to_bits(
-                                f64::from_bits(n) + elapsed.as_micros() as f64 / count as f64,
-                            ))
-                        });
-
-                        if args.silent {
-                            continue;
-                        }
-
-                        let status = res.status();
-
-                        let log_empty = || {
-                            info!(
-                                "[{}/{}] [{}] in {:.02}ms",
-                                idx,
-                                count,
-                                status,
-                                elapsed.as_micros() as f64 / 1000.,
-                            );
-                        };
-
-                        if res.content_length().is_some_and(|n| n == 0) {
-                            log_empty();
-                            continue;
-                        }
-
-                        buf.clear();
-                        let mut stream = res.bytes_stream();
-                        while let Some(Ok(b)) = stream.next().await {
-                            buf.extend_from_slice(&b);
-                        }
-
-                        if buf.is_empty() {
-                            log_empty();
-                            continue;
-                        }
-
-                        let str = String::from_utf8_lossy(&buf);
-                        info!(
-                            "[{}/{}] [{}] in {:.02}ms: {}",
-                            idx,
-                            count,
-                            status,
-                            elapsed.as_micros() as f64 / 1000.,
-                            str
-                        );
+                loop {
+                    let idx = idx.fetch_add(1, Ordering::Relaxed);
+                    if idx > count {
+                        break;
                     }
-                    Err(e) => {
-                        let elapsed = start.elapsed();
-                        if !args.silent {
-                            if let Some(status) = e.status() {
-                                error!(
-                                    "[{}/{}] [{}] in {:.02}ms: {:?}",
+
+                    let start = std::time::Instant::now();
+                    match client
+                        .execute(request.try_clone().unwrap())
+                        .await
+                        .and_then(|r| r.error_for_status())
+                    {
+                        Ok(res) => {
+                            let elapsed = start.elapsed();
+                            percentiles
+                                .lock()
+                                .insert(elapsed.as_micros() as f64 / 1000.);
+                            _ = mean.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                                Some(f64::to_bits(
+                                    f64::from_bits(n) + elapsed.as_micros() as f64 / count as f64,
+                                ))
+                            });
+
+                            if args.silent {
+                                continue;
+                            }
+
+                            let status = res.status();
+
+                            let log_empty = || {
+                                info!(
+                                    "[{}/{}] [{}] in {:.02}ms",
                                     idx,
                                     count,
                                     status,
                                     elapsed.as_micros() as f64 / 1000.,
-                                    e
                                 );
+                            };
+
+                            if res.content_length().is_some_and(|n| n == 0) {
+                                log_empty();
+                                continue;
+                            }
+
+                            buf.clear();
+                            let mut stream = res.bytes_stream();
+                            while let Some(Ok(b)) = stream.next().await {
+                                buf.extend_from_slice(&b);
+                            }
+
+                            if buf.is_empty() {
+                                log_empty();
+                                continue;
+                            }
+
+                            let str = String::from_utf8_lossy(&buf);
+                            info!(
+                                "[{}/{}] [{}] in {:.02}ms: {}",
+                                idx,
+                                count,
+                                status,
+                                elapsed.as_micros() as f64 / 1000.,
+                                str
+                            );
+                        }
+                        Err(e) => {
+                            let elapsed = start.elapsed();
+                            if !args.silent {
+                                if let Some(status) = e.status() {
+                                    error!(
+                                        "[{}/{}] [{}] in {:.02}ms: {:?}",
+                                        idx,
+                                        count,
+                                        status,
+                                        elapsed.as_micros() as f64 / 1000.,
+                                        e
+                                    );
+                                } else {
+                                    error!(
+                                        "[{}/{}] [N/A] in {:.02}ms: {:?}",
+                                        idx,
+                                        count,
+                                        elapsed.as_micros() as f64 / 1000.,
+                                        e
+                                    );
+                                }
+                            }
+
+                            let mut err_msg = err_msg.lock();
+                            if err_msg.is_empty() {
+                                _ = writeln!(err_msg, "Errors:\n- {e}");
                             } else {
-                                error!(
-                                    "[{}/{}] [N/A] in {:.02}ms: {:?}",
-                                    idx,
-                                    count,
-                                    elapsed.as_micros() as f64 / 1000.,
-                                    e
-                                );
+                                _ = writeln!(err_msg, "- {e}");
                             }
                         }
+                    };
+                }
+            });
+        }
+    });
 
-                        let mut err_msg = err_msg.lock();
-                        if err_msg.is_empty() {
-                            _ = writeln!(err_msg, "Errors:\n- {e}");
-                        } else {
-                            _ = writeln!(err_msg, "- {e}");
-                        }
-                    }
-                };
-            }
-        }));
-    }
-
-    for _ in 0..tasks {
-        futures.next().await;
-    }
     let elapsed = start.elapsed();
 
     let mut exit = ExitCode::SUCCESS;
-    let err_msg = Arc::into_inner(err_msg).unwrap().into_inner();
+    let err_msg = err_msg.into_inner();
     if !err_msg.is_empty() {
         error!("{}", &err_msg[..err_msg.len() - 1]);
         exit = ExitCode::FAILURE;
     }
 
-    let percentiles = Arc::into_inner(percentiles).unwrap().into_inner();
+    let percentiles = percentiles.into_inner();
 
     info!(
         "Sent {} requests in {:.04}s ({:.02} rps / {:.02}ms mean)\n- Stats: [ p0 (min): {:.02}ms / p1: {:.02}ms / p25: {:.02}ms / p50 (median): {:.02}ms / p75: {:.02}ms / p99: {:.02}ms / p100 (max): {:.02}ms ]",
