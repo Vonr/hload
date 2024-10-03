@@ -13,6 +13,7 @@ use clap::Parser;
 use futures_util::StreamExt;
 use parking_lot::Mutex;
 use quantiles::ckms::CKMS;
+use reqwest::Response;
 use reqwest::{
     header::{HeaderMap, HeaderValue},
     Method, Url,
@@ -57,17 +58,16 @@ fn main() -> ExitCode {
         .enable_time()
         .build()
         .unwrap()
-        .block_on(start())
+        .block_on(async { start() })
 }
 
-async fn start() -> ExitCode {
+fn start() -> ExitCode {
     let args = Args::parse();
 
     let default_logger = spdlog::default_logger();
 
-    let Ok(level) = std::env::var("LOGLVL")
-        .map(|s| Level::from_str(s.as_str()))
-        .unwrap_or(Ok(Level::Info))
+    let Ok(level) =
+        std::env::var("LOGLVL").map_or(Ok(Level::Info), |s| Level::from_str(s.as_str()))
     else {
         error!("Invalid value for $LOGLVL");
         return ExitCode::FAILURE;
@@ -107,12 +107,15 @@ async fn start() -> ExitCode {
         }
     };
 
-    let tasks = args.tasks.map(NonZeroUsize::get).unwrap_or_else(|| {
-        std::thread::available_parallelism()
-            .map(NonZeroUsize::get)
-            .unwrap_or(1)
-            * 4
-    });
+    let tasks = args.tasks.map_or_else(
+        || {
+            std::thread::available_parallelism()
+                .map(NonZeroUsize::get)
+                .unwrap_or(1)
+                * 4
+        },
+        NonZeroUsize::get,
+    );
 
     let idx = AtomicU64::from(1);
     let err_msg = Mutex::new(String::new());
@@ -144,7 +147,7 @@ async fn start() -> ExitCode {
                     match client
                         .execute(request.try_clone().unwrap())
                         .await
-                        .and_then(|r| r.error_for_status())
+                        .and_then(Response::error_for_status)
                     {
                         Ok(res) => {
                             let elapsed = start.elapsed();
