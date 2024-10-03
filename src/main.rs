@@ -21,7 +21,7 @@ use reqwest::{
     header::{HeaderMap, HeaderValue},
     Method, Url,
 };
-use spdlog::{log, Level, LevelFilter};
+use spdlog::{debug, error, info, Level, LevelFilter};
 
 #[derive(clap::Parser, Debug)]
 struct Args {
@@ -60,13 +60,18 @@ async fn main() -> ExitCode {
     let args = Args::parse();
 
     let default_logger = spdlog::default_logger();
-    default_logger.set_level_filter(LevelFilter::MoreSevereEqual(
-        std::env::var("LOGLVL")
-            .map(|s| Level::from_str(s.as_str()).unwrap_or(Level::Info))
-            .unwrap_or(Level::Info),
-    ));
 
-    log!(Level::Debug, "Args: {:?}", args);
+    let Ok(level) = std::env::var("LOGLVL")
+        .map(|s| Level::from_str(s.as_str()))
+        .unwrap_or(Ok(Level::Info))
+    else {
+        error!("Invalid value for $LOGLVL");
+        return ExitCode::FAILURE;
+    };
+
+    default_logger.set_level_filter(LevelFilter::MoreSevereEqual(level));
+
+    debug!("Args: {args:?}");
 
     let client = reqwest::Client::builder()
         .timeout(args.timeout)
@@ -77,13 +82,13 @@ async fn main() -> ExitCode {
     let unparsed_headers = Box::leak(args.header.into_boxed_slice());
     for header in unparsed_headers {
         let Some((k, v)) = header.split_once(':') else {
-            log!(Level::Error, "Malformed header {:?}", header);
+            error!("Malformed header: {header:?}");
             return ExitCode::FAILURE;
         };
 
         headers.insert(k.trim(), HeaderValue::from_str(v.trim()).unwrap());
     }
-    log!(Level::Debug, "Headers: {:?}", headers);
+    debug!("Headers: {headers:?}");
 
     let mut request = client.request(args.method, args.url).headers(headers);
     if let Some(content) = args.data {
@@ -93,7 +98,7 @@ async fn main() -> ExitCode {
     let request = match request.build() {
         Ok(r) => r,
         Err(e) => {
-            log!(Level::Error, "Could not build request: {e:?}");
+            error!("Could not build request: {e:?}");
             return ExitCode::FAILURE;
         }
     };
@@ -155,11 +160,10 @@ async fn main() -> ExitCode {
                         let status = res.status();
 
                         let log_empty = || {
-                            log!(
-                                Level::Info,
+                            info!(
                                 "[{}/{}] [{}] in {:.02}ms",
                                 idx,
-                                args.count,
+                                count,
                                 status,
                                 elapsed.as_micros() as f64 / 1000.,
                             );
@@ -182,19 +186,36 @@ async fn main() -> ExitCode {
                         }
 
                         let str = String::from_utf8_lossy(&buf);
-                        log!(
-                            Level::Info,
+                        info!(
                             "[{}/{}] [{}] in {:.02}ms: {}",
                             idx,
-                            args.count,
+                            count,
                             status,
                             elapsed.as_micros() as f64 / 1000.,
                             str
                         );
                     }
                     Err(e) => {
+                        let elapsed = start.elapsed();
                         if !args.silent {
-                            log!(Level::Error, "{}", &e);
+                            if let Some(status) = e.status() {
+                                error!(
+                                    "[{}/{}] [{}] in {:.02}ms: {:?}",
+                                    idx,
+                                    count,
+                                    status,
+                                    elapsed.as_micros() as f64 / 1000.,
+                                    e
+                                );
+                            } else {
+                                error!(
+                                    "[{}/{}] [N/A] in {:.02}ms: {:?}",
+                                    idx,
+                                    count,
+                                    elapsed.as_micros() as f64 / 1000.,
+                                    e
+                                );
+                            }
                         }
 
                         let mut err_msg = err_msg.lock();
@@ -217,14 +238,13 @@ async fn main() -> ExitCode {
     let mut exit = ExitCode::SUCCESS;
     let err_msg = Arc::into_inner(err_msg).unwrap().into_inner();
     if !err_msg.is_empty() {
-        log!(Level::Error, "{}", &err_msg[..err_msg.len() - 1]);
+        error!("{}", &err_msg[..err_msg.len() - 1]);
         exit = ExitCode::FAILURE;
     }
 
     let percentiles = Arc::into_inner(percentiles).unwrap().into_inner();
 
-    log!(
-        Level::Info,
+    info!(
         "Sent {} requests in {:.04}s ({:.02} rps / {:.02}ms mean)\n- Stats: [ p0 (min): {:.02}ms / p1: {:.02}ms / p25: {:.02}ms / p50 (median): {:.02}ms / p75: {:.02}ms / p99: {:.02}ms / p100 (max): {:.02}ms ]",
         count,
         elapsed.as_millis() as f64 / 1000.,
