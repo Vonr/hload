@@ -17,15 +17,14 @@ strip = "symbols"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-flume = "0.11"
 futures-buffered = "0.2"
 humantime = "2"
 parking_lot = "0.12"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "charset", "http2", "macos-system-configuration", "hickory-dns", "stream"] }
 spdlog-rs = { version = "0.3", features = ["multi-thread"] }
-tokio = { version = "1.40", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 quantiles = "0.7"
-futures-util = "0.3.30"
+futures-util = "0.3"
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/{ version }/{ name }-{ version }-{ target }{ archive-suffix }"

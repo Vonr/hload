@@ -105,22 +105,22 @@ async fn main() -> ExitCode {
             * 4
     });
 
-    let idx = Arc::new(AtomicU64::from(1));
     let mut futures = FuturesUnorderedBounded::new(tasks);
-    let (errs_send, errs_recv) = flume::unbounded();
-    let count = args.count.get();
+    let idx = Arc::new(AtomicU64::from(1));
+    let err_msg = Arc::new(Mutex::new(String::new()));
     let start = std::time::Instant::now();
 
     let percentiles = Arc::new(Mutex::new(CKMS::<f64>::new(0.001)));
     let mean = Arc::new(AtomicU64::from(f64::to_bits(0.0)));
 
+    let count = args.count.get();
     for _ in 0..tasks {
         let client = client.clone();
         let request = request.try_clone().unwrap();
         let idx = idx.clone();
-        let errs_send = errs_send.clone();
         let percentiles = percentiles.clone();
         let mean = mean.clone();
+        let err_msg = err_msg.clone();
 
         futures.push(tokio::spawn(async move {
             let mut buf = Vec::new();
@@ -197,7 +197,12 @@ async fn main() -> ExitCode {
                             log!(Level::Error, "{}", &e);
                         }
 
-                        let _ = errs_send.send_async(e).await;
+                        let mut err_msg = err_msg.lock();
+                        if err_msg.is_empty() {
+                            _ = writeln!(err_msg, "Errors:\n- {e}");
+                        } else {
+                            _ = writeln!(err_msg, "- {e}");
+                        }
                     }
                 };
             }
@@ -210,18 +215,9 @@ async fn main() -> ExitCode {
     let elapsed = start.elapsed();
 
     let mut exit = ExitCode::SUCCESS;
-    if !errs_recv.is_empty() {
-        log!(
-            Level::Error,
-            "Errors:\n{}",
-            errs_recv
-                .drain()
-                .fold(String::new(), |mut acc, e| {
-                    writeln!(acc, "- {e}").unwrap();
-                    acc
-                })
-                .trim_end_matches("\n")
-        );
+    let err_msg = Arc::into_inner(err_msg).unwrap().into_inner();
+    if !err_msg.is_empty() {
+        log!(Level::Error, "{}", &err_msg[..err_msg.len() - 1]);
         exit = ExitCode::FAILURE;
     }
 
